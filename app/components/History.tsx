@@ -1,5 +1,5 @@
 // History.tsx
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import { highlightSyntax } from "../utils/syntaxHighlighter";
 
 interface HistoryItem {
@@ -13,8 +13,16 @@ interface HistoryProps {
 }
 
 const History: React.FC<HistoryProps> = ({ items }) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [items.length]);
+
   return (
-    <div className="w-full mt-4 text-sm text-gray-300 bg-[#300A24] h-screen overflow-y-auto px-4">
+    <div ref={containerRef} className="w-full mt-4 text-sm text-gray-300 bg-[#300A24] h-screen overflow-y-auto px-4 select-text">
       {items.map((item, index) => (
         <div key={index} className="mb-4">
           <div

@@ -10,12 +10,14 @@ interface SyntaxHighlightedInputProps {
   value: string;
   onChange: (value: string) => void;
   onEnter?: () => void; // Add onEnter callback
+  disableAutocomplete?: boolean; // developer toggle
 }
 
 const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
   value,
   onChange,
   onEnter,
+  disableAutocomplete = false,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
@@ -34,8 +36,6 @@ const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
     if (!text) return "";
 
     // Split text into tokens to avoid HTML conflicts
-    const tokens: Array<{ text: string; type: string }> = [];
-    let currentIndex = 0;
 
     // Define patterns for different syntax elements (order matters!)
     const patterns = [
@@ -237,9 +237,11 @@ const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
     setCursorPosition(newCursorPosition);
 
     // Update autocomplete suggestions
-    const suggestions = getAutocompleteMatches(newValue, newCursorPosition);
+    const suggestions = disableAutocomplete
+      ? []
+      : getAutocompleteMatches(newValue, newCursorPosition);
     setAutocompleteSuggestions(suggestions);
-    setShowAutocomplete(suggestions.length > 0);
+    setShowAutocomplete(!disableAutocomplete && suggestions.length > 0);
     setSelectedSuggestionIndex(0);
   }; // Handle cursor position changes
   const handleSelectionChange = () => {
@@ -248,9 +250,11 @@ const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
       setCursorPosition(newCursorPosition);
 
       // Update autocomplete when cursor moves
-      const suggestions = getAutocompleteMatches(value, newCursorPosition);
+      const suggestions = disableAutocomplete
+        ? []
+        : getAutocompleteMatches(value, newCursorPosition);
       setAutocompleteSuggestions(suggestions);
-      setShowAutocomplete(suggestions.length > 0);
+      setShowAutocomplete(!disableAutocomplete && suggestions.length > 0);
       setSelectedSuggestionIndex(0);
     }
   };
@@ -262,7 +266,7 @@ const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
     const beforeCursor = value.substring(0, cursorPosition);
     const afterCursor = value.substring(cursorPosition);
     const words = beforeCursor.split(/[^a-zA-Z]/);
-    const currentWord = words[words.length - 1];
+    const currentWord = (words[words.length - 1] ?? "");
 
     // Replace the current word with the selected item
     const newBeforeCursor = beforeCursor.substring(
@@ -292,16 +296,12 @@ const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
   };
 
   // Handle focus and blur
-  const handleBlur = (e: React.FocusEvent<HTMLTextAreaElement>) => {
+  const handleBlur = () => {
     // Don't hide autocomplete immediately to allow clicks
     setTimeout(() => {
       setShowAutocomplete(false);
     }, 150);
-
-    // Refocus to maintain calculator behavior
-    setTimeout(() => {
-      textareaRef.current?.focus();
-    }, 10);
+    // Do not auto-refocus so users can select/copy from history/output
   };
 
   // Handle key events for better UX
@@ -332,9 +332,10 @@ const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
           if (e.key === "Enter") {
             e.preventDefault();
           }
-          handleAutocompleteSelect(
-            autocompleteSuggestions[selectedSuggestionIndex]
-          );
+          {
+            const sel = autocompleteSuggestions[selectedSuggestionIndex];
+            if (sel) handleAutocompleteSelect(sel);
+          }
           break;
         case "Escape":
           setShowAutocomplete(false);
