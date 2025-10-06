@@ -1,4 +1,3 @@
-// Barrel re-export preserving original API surface
 export type { DimensionVector, UnitDef, Quantity } from "./units/types";
 export { ZERO_DIMS } from "./units/types";
 export {
@@ -24,4 +23,5 @@ export {
 	getDisplayUnitAndFactor,
 	type UserPrefs,
 	setFriendlyUnitAliasesEnabled,
+	isSIUnit,
 } from "./units/registry";

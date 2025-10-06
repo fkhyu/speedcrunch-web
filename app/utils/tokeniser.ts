@@ -2,8 +2,8 @@ import Decimal from "decimal.js";
 import { err, ok, Result } from "neverthrow";
 import { match } from "ts-pattern";
 import { resolveUnit } from "./units";
-
-// Removed external debug import to make the module self-contained
+import { DEFAULT_CONSTANTS } from "./constants";
+import { debug } from "./debug";
 
 /**
  * Represents an error where the tokeniser couldn't match the input to any token.
@@ -108,6 +108,13 @@ const tokenMatchers = [
 			}
 			// Fall back to known functions if matched here
 			const lower = str.toLowerCase();
+			// Memory registers recognized as identifiers: ans, mem/m/ind
+			if (/^(ans)$/.test(lower)) {
+				return { type: "memo" as const, name: "ans" as const };
+			}
+			if (/^(mem|m|ind)$/.test(lower)) {
+				return { type: "memo" as const, name: "ind" as const };
+			}
             if (/(^((a(rc)?)?(sin|cos|tan))$)|^(atan2)$|^(sinh|cosh|tanh|asinh|acosh|atanh)$|^(log|lg|ln)$|^(root|sqrt|√|cbrt|pow|exp|exp2|exp10)$|^(abs|floor|ceil|round|trunc|min|max)$|^factorial$|^(deg|rad)$|^(gamma|lgamma)$/.test(lower)) {
 				return {
 					type: "func" as const,
@@ -204,11 +211,20 @@ const tokenMatchers = [
  * tokenise("1 ö 2") // => Err({ type: "UNKNOWN_TOKEN", idx: 2 }) // 2 === "1 ö 2".indexOf("ö")
  * ```
  */
-export default function tokenise(expression: string): Result<Token[], LexicalError> {
-    const raw = [...tokens(expression)];
+export default function tokenise(
+    expression: string,
+    options?: { envNames?: readonly string[] }
+): Result<Token[], LexicalError> {
+    if (debug.isEnabled()) debug.trace("tokenise.input", expression);
+    const envNameSet: ReadonlySet<string> | null = options?.envNames ? new Set(options.envNames) : null;
+    const raw = [...tokens(expression, envNameSet)];
     const combined = Result.combine(raw);
-    if (combined.isErr()) return combined;
+    if (combined.isErr()) {
+        if (debug.isEnabled()) debug.trace("tokenise.error", combined.error);
+        return combined;
+    }
     const withImul = insertImplicitMultiplication(combined.value);
+    if (debug.isEnabled()) debug.trace("tokenise.output", withImul.map(t => (t as any).type === "oper" ? `${(t as any).type}:${(t as any).name}` : (t as any).type === "litr" ? `litr:${(t as any).value.toString()}` : (t as any).type === "func" ? `func:${(t as any).name}` : (t as any).type === "vari" ? `vari:${(t as any).name}` : (t as any).type === "unit" ? `unit:${(t as any).name}` : (t as any).type));
     return ok(withImul);
 }
 
@@ -224,20 +240,23 @@ export default function tokenise(expression: string): Result<Token[], LexicalErr
  * @see {@link tokenise}
  * @see {@link Token}
  */
-function* tokens(expression: string): Generator<Result<Token, LexicalError>, void, void> {
+function* tokens(
+    expression: string,
+    envNames: ReadonlySet<string> | null,
+): Generator<Result<Token, LexicalError>, void, void> {
 	const end = expression.length;
 	let idx = 0;
 
 	eating: while (idx < end) {
 		const slice = expression.slice(idx, end);
 
-		const whitespace = /^\s+/.exec(slice)?.[0];
+        const whitespace = /^\s+/.exec(slice)?.[0];
 		if (whitespace) {
 			idx += whitespace.length;
 			continue eating;
 		}
 
-/* Debug input hook removed for production build */
+        if (debug.isEnabled()) debug.trace("tokenise.scan", { idx, slice: slice.slice(0, 32) });
 
 		matching: for (const [regex, build] of tokenMatchers) {
 			const str = regex.exec(slice)?.[0];
@@ -248,23 +267,57 @@ function* tokens(expression: string): Generator<Result<Token, LexicalError>, voi
 
             idx += str.length;
 
-            // If this looked like a variable but can be fully segmented into known units (e.g., "Ws" -> ["W","s"]),
-            // emit the unit tokens back-to-back. Implicit multiplication will be inserted in a later pass.
+            // If this looked like a variable and is a known constant (e.g., "NA"),
+            // do NOT split it into units. Treat it as an identifier to be resolved from env.
             if (token && token.type === "vari") {
-                const segmented = splitIntoUnitTokens(token.name as string);
-                if (segmented) {
-                    for (const t of segmented) {
-                        yield ok(t as Token);
+                const name = (token as any).name as string;
+                const isKnownConstant = Object.prototype.hasOwnProperty.call(DEFAULT_CONSTANTS, name);
+                if (!isKnownConstant) {
+                    // If it can be fully segmented into known units (e.g., "Ws" -> ["W","s"]),
+                    // emit the unit tokens back-to-back. Implicit multiplication will be inserted later.
+                    const segmented = splitIntoUnitTokens(name);
+                    if (segmented) {
+                        if (debug.isEnabled()) debug.trace("tokenise.splitUnits", { identifier: name, parts: segmented.map(s => (s as any).name) });
+                        for (const t of segmented) {
+                            yield ok(t as Token);
+                        }
+                        continue eating;
                     }
+                    // Try to segment into known identifiers from the environment if available and fully cover the name
+                    if (envNames && !envNames.has(name)) {
+                        const idParts = splitIntoIdentifierTokens(name, envNames);
+                        if (idParts) {
+                            if (debug.isEnabled()) debug.trace("tokenise.splitIdents", { identifier: name, parts: idParts.map(s => (s as any).name) });
+                            for (const t of idParts) {
+                                yield ok(t as Token);
+                            }
+                            continue eating;
+                        }
+                    }
+                }
+            }
+
+            // If this is an unknown identifier and the next character is an opening parenthesis,
+            // reinterpret it as a function name token so that implicit multiplication is NOT inserted
+            // between the identifier and the following '('. This enables user-defined function calls
+            // like "f(x)" without needing the tokenizer to know about the function ahead of time.
+            if (token && token.type === "vari") {
+                const nextChar = expression[idx];
+                if (nextChar === "(") {
+                    const funcToken = { type: "func", name: (token as any).name } as Token;
+                    if (debug.isEnabled()) debug.trace("tokenise.variToFunc", (token as any).name);
+                    yield ok(funcToken);
                     continue eating;
                 }
             }
 
+            if (debug.isEnabled()) debug.trace("tokenise.token", token);
             yield ok(token as Token);
 			continue eating;
 		}
 
 		yield err({ type: "UNKNOWN_TOKEN", idx });
+        if (debug.isEnabled()) debug.trace("tokenise.unknown", { idx, near: expression.slice(Math.max(0, idx - 8), idx + 8) });
 		return;
 	}
 }
@@ -309,6 +362,26 @@ function splitIntoUnitTokens(identifier: string): Token[] | null {
     }
     if (!matched) return null;
     out.push(matched.token);
+    i += matched.len;
+  }
+  return out.length > 0 ? out : null;
+}
+
+/** Greedy left-to-right split of an identifier into known env identifier tokens if possible; otherwise null */
+function splitIntoIdentifierTokens(identifier: string, known: ReadonlySet<string>): Token[] | null {
+  const out: Token[] = [];
+  let i = 0;
+  while (i < identifier.length) {
+    let matched: { name: string; len: number } | null = null;
+    for (let len = identifier.length - i; len >= 1; len--) {
+      const slice = identifier.slice(i, i + len);
+      if (known.has(slice)) {
+        matched = { name: slice, len };
+        break;
+      }
+    }
+    if (!matched) return null;
+    out.push({ type: "vari", name: matched.name } as any);
     i += matched.len;
   }
   return out.length > 0 ? out : null;

@@ -421,7 +421,7 @@ function scoreInRange(v: Decimal): Decimal {
 	return Decimal.log10(v.div(1000)).abs();
 }
 
-function isSIUnit(name: string): boolean {
+export function isSIUnit(name: string): boolean {
 	switch (name) {
 		case "mm":
 		case "cm":
@@ -444,6 +444,7 @@ function isSIUnit(name: string): boolean {
 
 export type UnitDisplayMode = "auto" | "fixed";
 export type UserPrefs = {
+    global?: { siBaseMode: "auto" | "si"; showDerivedAnnotations: boolean };
     time?: { mode: UnitDisplayMode; unit?: string };
     length?: { mode: UnitDisplayMode; unit?: string };
     volume?: { mode: UnitDisplayMode; unit?: string };
@@ -456,15 +457,13 @@ export function getDisplayUnitAndFactor(args: { dims: DimensionVector; valueInBa
         return { unit: null, factor: new Decimal(1) };
     }
 
-    // If last unit is compatible, prefer it
-    if (lastUnitName) {
-        const last = UNITS[lastUnitName];
-        if (last && dimsEqual(dims, last.dims)) {
-            return { unit: last.symbol, factor: last.factor };
-        }
+    // Global SI mode: force composite SI base units (no auto-scaling or derived symbols like Hz)
+    if (prefs?.global?.siBaseMode === "si") {
+        const formatted = formatUnitFromDims(dims);
+        return { unit: formatted, factor: new Decimal(1) };
     }
 
-    // Preferences: allow fixed unit per family (time/length for now)
+    // Preferences: allow fixed unit per family (time/length/volume)
     const famKey = ((): keyof typeof UNIT_FAMILIES | null => {
         for (const key of Object.keys(UNIT_FAMILIES) as Array<keyof typeof UNIT_FAMILIES>) {
             const names = UNIT_FAMILIES[key]!;
@@ -508,13 +507,28 @@ export function getDisplayUnitAndFactor(args: { dims: DimensionVector; valueInBa
         }
     }
 
+    // If last unit is compatible, prefer it (only when no fixed preference is set)
+    if (lastUnitName) {
+        const last = UNITS[lastUnitName];
+        if (last && dimsEqual(dims, last.dims)) {
+            return { unit: last.symbol, factor: last.factor };
+        }
+    }
+
     // Try to find a canonical single unit with matching dims
     // Prefer SI base symbols when available (but prefer kg over g for mass)
     const preferredOrder = ["m", "kg", "s", "A", "K", "mol", "cd"] as const;
     for (const sym of preferredOrder) {
         const u = UNITS[sym];
         if (u && dimsEqual(dims, u.dims)) {
-            return { unit: u.symbol, factor: u.factor };
+            const base = { unit: u.symbol, factor: u.factor } as { unit: string | null; factor: Decimal };
+            if (prefs?.global?.showDerivedAnnotations) {
+                const composite = formatUnitFromDims(dims);
+                if (composite && composite !== base.unit) {
+                    return { unit: `${base.unit} (${composite})`, factor: base.factor };
+                }
+            }
+            return base;
         }
     }
 
@@ -528,11 +542,49 @@ export function getDisplayUnitAndFactor(args: { dims: DimensionVector; valueInBa
         const u = UNITS[key]!;
         if (!CANONICAL_DISPLAY.has(u.symbol)) continue;
         if (dimsEqual(dims, u.dims)) {
-            return { unit: u.symbol, factor: u.factor };
+            const base = { unit: u.symbol, factor: u.factor } as { unit: string | null; factor: Decimal };
+            if (prefs?.global?.showDerivedAnnotations) {
+                const composite = formatUnitFromDims(dims);
+                if (composite && composite !== base.unit) {
+                    return { unit: `${base.unit} (${composite})`, factor: base.factor };
+                }
+            }
+            return base;
         }
     }
 
-    // Composite unit: format from dims, no scaling (already in base units)
-    const formatted = formatUnitFromDims(dims);
-    return { unit: formatted, factor: new Decimal(1) };
+    // Composite unit: prefer SI base symbols but use kg for mass instead of g
+    // Only mass has non-1 base factor among SI bases (kg vs g). Others are factor 1.
+    // So we can compute factor adjustment as 1000^massExponent and output "kg".
+    const massExp = dims[1] as number;
+    const partsNum: string[] = [];
+    const partsDen: string[] = [];
+    const pushPart = (sym: string, exp: number) => {
+        const abs = Math.abs(exp);
+        const piece = abs === 1 ? sym : `${sym}^${abs}`;
+        if (exp > 0) partsNum.push(piece); else partsDen.push(piece);
+    };
+    // m (length)
+    if (dims[0] !== 0) pushPart("m", dims[0] as number);
+    // kg (mass) — prefer kg over g
+    if (massExp !== 0) pushPart("kg", massExp);
+    // s (time)
+    if (dims[2] !== 0) pushPart("s", dims[2] as number);
+    // A (electric current)
+    if (dims[3] !== 0) pushPart("A", dims[3] as number);
+    // K (thermodynamic temperature)
+    if (dims[4] !== 0) pushPart("K", dims[4] as number);
+    // mol (amount of substance)
+    if (dims[5] !== 0) pushPart("mol", dims[5] as number);
+    // cd (luminous intensity)
+    if (dims[6] !== 0) pushPart("cd", dims[6] as number);
+
+    const unitStr = (() => {
+        if (partsDen.length === 0) return partsNum.length ? partsNum.join("*") : null;
+        const num = partsNum.length ? partsNum.join("*") : "1";
+        return `${num}/${partsDen.join("*")}`;
+    })();
+    // Factor: only adjust for kg vs g (kg = 1000 g)
+    const factor = massExp !== 0 ? new Decimal(1000).pow(massExp) : new Decimal(1);
+    return { unit: unitStr, factor };
 }

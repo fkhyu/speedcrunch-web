@@ -11,6 +11,8 @@ interface SyntaxHighlightedInputProps {
   onChange: (value: string) => void;
   onEnter?: () => void; // Add onEnter callback
   disableAutocomplete?: boolean; // developer toggle
+  onHistoryPrev?: () => void;
+  onHistoryNext?: () => void;
 }
 
 const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
@@ -18,6 +20,8 @@ const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
   onChange,
   onEnter,
   disableAutocomplete = false,
+  onHistoryPrev,
+  onHistoryNext,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
@@ -306,11 +310,255 @@ const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
 
   // Handle key events for better UX
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Explicit wrap shortcut: Ctrl+Shift+9 (Ctrl+Shift+"(") wraps selection or token with ()
+    if (textareaRef.current && e.ctrlKey && e.shiftKey && (e.key === "9" || e.key === "(")) {
+      const start = textareaRef.current.selectionStart ?? 0;
+      const end = textareaRef.current.selectionEnd ?? start;
+      const hasSelection = start !== end;
+      const before = value.slice(0, start);
+      const selected = value.slice(start, end);
+      const after = value.slice(end);
+
+      e.preventDefault();
+      if (hasSelection) {
+        const newValue = `${before}(${selected})${after}`;
+        onChange(newValue);
+        setTimeout(() => {
+          if (textareaRef.current) {
+            textareaRef.current.setSelectionRange(start + 1, end + 1);
+            textareaRef.current.focus();
+          }
+        }, 0);
+        return;
+      }
+
+      // No selection: wrap token under caret using simple token boundaries
+      const isTokenChar = (ch: string) => /[A-Za-z0-9_.π]/.test(ch);
+      let left = start;
+      while (left > 0 && isTokenChar(value.charAt(left - 1))) left--;
+      let right = start;
+      while (right < value.length && isTokenChar(value.charAt(right))) right++;
+
+      if (left !== right) {
+        const newValue = `${value.slice(0, left)}(${value.slice(left, right)})${value.slice(right)}`;
+        onChange(newValue);
+        const newCaret = right + 2; // after the closing paren
+        setTimeout(() => {
+          if (textareaRef.current) {
+            textareaRef.current.setSelectionRange(newCaret, newCaret);
+            textareaRef.current.focus();
+          }
+        }, 0);
+        return;
+      }
+      // Fallback: just insert () at caret and place inside
+      const newValue = `${before}()${after}`;
+      onChange(newValue);
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.setSelectionRange(start + 1, start + 1);
+          textareaRef.current.focus();
+        }
+      }, 0);
+      return;
+    }
+
+    // Symmetric wrap shortcut: Ctrl+Shift+0 (Ctrl+Shift+")") also wraps selection or token
+    if (textareaRef.current && e.ctrlKey && e.shiftKey && (e.key === "0" || e.key === ")")) {
+      const start = textareaRef.current.selectionStart ?? 0;
+      const end = textareaRef.current.selectionEnd ?? start;
+      const hasSelection = start !== end;
+      const before = value.slice(0, start);
+      const selected = value.slice(start, end);
+      const after = value.slice(end);
+
+      e.preventDefault();
+      if (hasSelection) {
+        const newValue = `${before}(${selected})${after}`;
+        onChange(newValue);
+        setTimeout(() => {
+          if (textareaRef.current) {
+            textareaRef.current.setSelectionRange(start + 1, end + 1);
+            textareaRef.current.focus();
+          }
+        }, 0);
+        return;
+      }
+
+      // When at the right edge of a token, wrap that token
+      const isTokenChar = (ch: string) => /[A-Za-z0-9_.π]/.test(ch);
+      let left = start;
+      while (left > 0 && isTokenChar(value.charAt(left - 1))) left--;
+      let right = start;
+      while (right < value.length && isTokenChar(value.charAt(right))) right++;
+
+      if (left !== right) {
+        const newValue = `${value.slice(0, left)}(${value.slice(left, right)})${value.slice(right)}`;
+        onChange(newValue);
+        const newCaret = right + 2;
+        setTimeout(() => {
+          if (textareaRef.current) {
+            textareaRef.current.setSelectionRange(newCaret, newCaret);
+            textareaRef.current.focus();
+          }
+        }, 0);
+        return;
+      }
+
+      // Fallback
+      const newValue = `${before}()${after}`;
+      onChange(newValue);
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.setSelectionRange(start + 1, start + 1);
+          textareaRef.current.focus();
+        }
+      }, 0);
+      return;
+    }
+    // Auto-pairing for parentheses and smart deletion/skipping
+    if (textareaRef.current) {
+      const start = textareaRef.current.selectionStart ?? 0;
+      const end = textareaRef.current.selectionEnd ?? start;
+      const hasSelection = start !== end;
+      const before = value.slice(0, start);
+      const selected = value.slice(start, end);
+      const after = value.slice(end);
+      const nextChar = value.charAt(start);
+      const prevChar = value.charAt(start - 1);
+
+      // Insert matching pair on '(' (and wrap token under caret when no selection)
+      if (e.key === "(") {
+        e.preventDefault();
+        if (hasSelection) {
+          const newValue = `${before}(${selected})${after}`;
+          onChange(newValue);
+          // keep selection inside the new parens
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.setSelectionRange(start + 1, end + 1);
+              textareaRef.current.focus();
+            }
+          }, 0);
+          return;
+        }
+
+        // No selection: try to wrap token under caret (useful at rightmost position)
+        const isTokenChar = (ch: string) => /[A-Za-z0-9_.π]/.test(ch);
+        let left = start;
+        while (left > 0 && isTokenChar(value.charAt(left - 1))) left--;
+        let right = start;
+        while (right < value.length && isTokenChar(value.charAt(right))) right++;
+
+        if (left !== right) {
+          const newValue = `${value.slice(0, left)}(${value.slice(left, right)})${value.slice(right)}`;
+          onChange(newValue);
+          // place caret after the closing paren so typing can continue
+          const newCaret = right + 2;
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.setSelectionRange(newCaret, newCaret);
+              textareaRef.current.focus();
+            }
+          }, 0);
+          return;
+        }
+
+        // Fallback: insert empty pair and put caret inside
+        {
+          const newValue = `${before}()${after}`;
+          onChange(newValue);
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.setSelectionRange(start + 1, start + 1);
+              textareaRef.current.focus();
+            }
+          }, 0);
+          return;
+        }
+      }
+
+      // Skip over existing ')' if present; otherwise insert ')' if there is an unmatched '('
+      if (e.key === ")") {
+        // Only do smart-skip when no selection
+        if (!hasSelection && nextChar === ")") {
+          e.preventDefault();
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.setSelectionRange(start + 1, start + 1);
+              textareaRef.current.focus();
+            }
+          }, 0);
+          return;
+        }
+        // If there is an unmatched '(' to the left, auto-insert a ')'
+        if (!hasSelection) {
+          let balance = 0;
+          for (let i = 0; i < start; i++) {
+            const ch = value.charAt(i);
+            if (ch === "(") balance++;
+            else if (ch === ")") balance--;
+          }
+          if (balance > 0) {
+            e.preventDefault();
+            const newValue = `${before})${after}`;
+            onChange(newValue);
+            setTimeout(() => {
+              if (textareaRef.current) {
+                textareaRef.current.setSelectionRange(start + 1, start + 1);
+                textareaRef.current.focus();
+              }
+            }, 0);
+            return;
+          }
+        }
+        // otherwise fall through to normal input
+      }
+
+      // Smart delete: when between a matching pair "()", delete both
+      if (e.key === "Backspace") {
+        if (!hasSelection && prevChar === "(" && nextChar === ")") {
+          e.preventDefault();
+          const newValue = `${value.slice(0, start - 1)}${value.slice(start + 1)}`;
+          onChange(newValue);
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.setSelectionRange(start - 1, start - 1);
+              textareaRef.current.focus();
+            }
+          }, 0);
+          return;
+        }
+      }
+    }
+
     // Handle π symbol insertion with Alt+P (or Ctrl+P on Windows)
     if ((e.altKey || e.ctrlKey) && e.key.toLowerCase() === "p") {
       e.preventDefault();
       insertTextAtCursor("π");
       return;
+    }
+
+    const caretPos = textareaRef.current?.selectionStart ?? 0;
+    const atStart = caretPos <= 0;
+    const atEnd = caretPos >= value.length;
+
+    // Conditional history vs autocomplete navigation
+    if (e.key === "ArrowUp") {
+      if (!showAutocomplete || atStart) {
+        e.preventDefault();
+        if (onHistoryPrev) onHistoryPrev();
+        return;
+      }
+      // else fall through to autocomplete handling below
+    }
+    if (e.key === "ArrowDown") {
+      if (!showAutocomplete || atEnd) {
+        e.preventDefault();
+        if (onHistoryNext) onHistoryNext();
+        return;
+      }
+      // else fall through to autocomplete handling below
     }
 
     if (showAutocomplete && autocompleteSuggestions.length > 0) {

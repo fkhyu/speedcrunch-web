@@ -5,6 +5,7 @@ import { Quantity, makeScalar, add as qAdd, sub as qSub, multiply as qMul, divid
 
 type AngleUnit = "rad" | "deg";
 import { Token } from "./tokeniser";
+import { debug } from "./debug";
 Decimal.set({ precision: 500 });
 const PI = Decimal.acos(-1);
 const E = Decimal.exp(1);
@@ -81,7 +82,8 @@ function lgammaDecimal(z: Decimal): Decimal {
 }
 
 export type EvalResult = Result<Quantity, EvalErrorId>;
-export type EvalEnv = Record<string, Quantity>;
+export type UserFunction = { params: string[]; body: Token[] };
+export type EvalEnv = Record<string, Quantity | UserFunction>;
 export type EvalErrorId =
 	| "UNEXPECTED_EOF"
 	| "UNEXPECTED_TOKEN"
@@ -104,6 +106,7 @@ export type EvalErrorId =
  *
  */
 export default function evaluate(tokens: Token[], ans: Decimal, ind: Decimal, angleUnit: AngleUnit, env: EvalEnv = {}): EvalResult {
+    if (debug.isEnabled()) debug.trace("eval.start", { len: tokens.length, angleUnit, envKeys: Object.keys(env) });
 	// This function is an otherwise stock-standard Pratt parser but instead
 	// of building a full AST as the `left` value, we instead eagerly evaluate
 	// the sub-expressions in the `led` parselets.
@@ -152,6 +155,7 @@ export default function evaluate(tokens: Token[], ans: Decimal, ind: Decimal, an
 	 * Returns the value of a sub-expression without a preceding (i.e. left) expression (i.e. value).
 	 */
     function nud(token: Token | undefined): EvalResult {
+        if (debug.isEnabled()) debug.trace("eval.nud", token);
 		return match(token)
 			.with(undefined, () => err("UNEXPECTED_EOF" as const))
             .with({ type: "litr" }, token => ok(makeScalar(token.value)))
@@ -160,11 +164,11 @@ export default function evaluate(tokens: Token[], ans: Decimal, ind: Decimal, an
             .with({ type: "cons", name: "e" }, () => ok(makeScalar(E)))
             .with({ type: "memo", name: "ans" }, () => ok(makeScalar(ans)))
             .with({ type: "memo", name: "ind" }, () => ok(makeScalar(ind)))
-			.with({ type: "vari" }, token => {
+            .with({ type: "vari" }, token => {
                 const found = env[token.name];
-				if (!found) return err("UNEXPECTED_TOKEN");
-                return ok(found);
-			})
+                if (!found || (found as any).body) return err("UNEXPECTED_TOKEN");
+                return ok(found as Quantity);
+            })
             .with({ type: "oper", name: "-" }, () => evalExpr(3).map(right => ({ value: right.value.neg(), dims: right.dims })))
 			.with({ type: "lbrk" }, () =>
 				evalExpr(0).andThen(value =>
@@ -173,9 +177,26 @@ export default function evaluate(tokens: Token[], ans: Decimal, ind: Decimal, an
 						.mapErr(() => "NO_RHS_BRACKET" as const),
 				),
 			)
-			.with({ type: "func" }, token =>
-				evalArgs().andThen(args =>
-					match(token.name)
+            .with({ type: "func" }, token =>
+                evalArgs().andThen(args => {
+                    if (debug.isEnabled()) debug.trace("eval.funcCall", { name: token.name, argc: args.length });
+                    // First: user-defined functions from env
+                    const maybeFn = env[token.name] as UserFunction | undefined;
+                    if (maybeFn && (maybeFn as any).body) {
+                        if (debug.isEnabled()) debug.trace("eval.userFunc", { name: token.name, params: maybeFn.params });
+                        const { params, body } = maybeFn;
+                        if (args.length !== params.length) return err(args.length < params.length ? "NOT_ENOUGH_ARGS" as const : "TOO_MANY_ARGS" as const);
+                        // Build child env with arguments bound to parameter names
+                        const childEnv: EvalEnv = { ...env };
+                        for (let i = 0; i < params.length; i++) {
+                            childEnv[params[i]!] = args[i]!;
+                        }
+                        const res = evaluate(body, ans, ind, angleUnit, childEnv);
+                        if (debug.isEnabled()) debug.trace("eval.userFunc.result", res.isOk() ? { ok: (res.value as any).value?.toString() } : { err: (res as any).error });
+                        return res;
+                    }
+
+                    return match(token.name)
 						.with("root", () => {
 							if (args.length < 1) return err("NOT_ENOUGH_ARGS" as const);
 							if (args.length > 2) return err("TOO_MANY_ARGS" as const);
@@ -261,7 +282,7 @@ export default function evaluate(tokens: Token[], ans: Decimal, ind: Decimal, an
                             const a = args[0]!; if (!isDimensionless(a)) return err("DIMENSION_MISMATCH" as const);
                             return ok(makeScalar(lgammaDecimal(a.value)));
                         })
-						.otherwise(funcName => {
+                        .otherwise(funcName => {
 							if (args.length < 1) return err("NOT_ENOUGH_ARGS" as const);
 							// Special-case log10 as log with optional base: log(base;value)
 							if (funcName === "log10" && args.length === 2) {
@@ -304,8 +325,8 @@ export default function evaluate(tokens: Token[], ans: Decimal, ind: Decimal, an
                                 return ok(makeScalar(func(arg.value)));
                             }
                             return ok(makeScalar(func ? func(arg.value) : arg.value));
-						}),
-				),
+                        });
+                }),
 			)
 			.otherwise(() => err("UNEXPECTED_TOKEN"));
 	}
@@ -317,6 +338,7 @@ export default function evaluate(tokens: Token[], ans: Decimal, ind: Decimal, an
 	 * Returns the value of a sub-expression with a preceding (i.e. left) expression (i.e. value).
 	 */
     function led(token: Token | undefined, left: Ok<Quantity, EvalErrorId>): EvalResult {
+        if (debug.isEnabled()) debug.trace("eval.led", token);
 		return (
 			match(token)
 				.with(undefined, () => err("UNEXPECTED_EOF" as const))
@@ -382,7 +404,7 @@ export default function evaluate(tokens: Token[], ans: Decimal, ind: Decimal, an
 		});
 	}
 
-	function evalExpr(rbp: number): EvalResult {
+    function evalExpr(rbp: number): EvalResult {
 		let left = nud(next());
 
 		while (left.isOk() && peek() && lbp(peek()!) > rbp) {
@@ -392,18 +414,23 @@ export default function evaluate(tokens: Token[], ans: Decimal, ind: Decimal, an
 		return left;
 	}
 
-	const result = evalExpr(0);
+    const result = evalExpr(0);
 
 	// After the root eval call there shouldn't be anything to peek at
     if (peek()) {
-		return err("UNEXPECTED_TOKEN");
+        if (debug.isEnabled()) debug.trace("eval.end.err", "UNEXPECTED_TOKEN");
+        return err("UNEXPECTED_TOKEN");
     } else if (result.isErr()) {
-		return result;
+        if (debug.isEnabled()) debug.trace("eval.end.err", (result as any).error);
+        return result;
     } else if (result.value?.value?.isNaN()) {
-		return err("NOT_A_NUMBER");
+        if (debug.isEnabled()) debug.trace("eval.end.err", "NOT_A_NUMBER");
+        return err("NOT_A_NUMBER");
     } else if (!result.value?.value?.isFinite()) {
-		return err("INFINITY");
+        if (debug.isEnabled()) debug.trace("eval.end.err", "INFINITY");
+        return err("INFINITY");
 	} else {
+        if (debug.isEnabled()) debug.trace("eval.end.ok", { value: result.value.value.toString(), dims: result.value.dims });
 		return result;
 	}
 }
