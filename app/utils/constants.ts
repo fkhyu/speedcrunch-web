@@ -27,6 +27,8 @@ function quantityFrom(value: number | string, numUnit: string, denUnit?: string)
 
 export const DEFAULT_CONSTANTS: Record<string, Quantity> = {
     // Mathematical
+    pi: { value: Decimal.acos(-1), dims: [0,0,0,0,0,0,0] } as any,
+    e: { value: new Decimal(1).exp(), dims: [0,0,0,0,0,0,0] } as any,
     tau: { value: new Decimal(2).mul(Decimal.acos(-1)), dims: [0,0,0,0,0,0,0] } as any,
     phi: { value: new Decimal(1).add(new Decimal(5).sqrt()).div(2), dims: [0,0,0,0,0,0,0] } as any,
 
@@ -269,6 +271,8 @@ export const DEFAULT_CONSTANTS: Record<string, Quantity> = {
 };
 
 export const CONSTANT_DESCRIPTIONS: Record<string, string> = {
+    pi: "Archimedes' constant (π)",
+    e: "Euler's number",
     tau: "Circle constant 2π",
     phi: "Golden ratio",
     c: "Speed of light (m/s)",

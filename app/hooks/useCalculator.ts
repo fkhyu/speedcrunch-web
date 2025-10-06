@@ -34,17 +34,26 @@ export function useCalculator() {
       return;
     }
 
+    // Built-in command: /clear → clears the history/messages
+    const cmdClear = input.trim().match(/^\s*\/clear\s*$/i);
+    if (cmdClear) {
+      setResult("");
+      setResultUnit(null);
+      setHint("Clears history");
+      return;
+    }
+
     // Built-in command: /const or /const <name>
     const cmdConst = input.trim().match(/^\s*\/const(?:\s+(\w+))?\s*$/i);
     if (cmdConst) {
       const name = cmdConst[1];
       if (!name) {
-        setResult(Object.keys(DEFAULT_CONSTANTS).sort().join(", "));
+        setResult(Object.keys(env).sort().join(", "));
         setResultUnit(null);
         setHint("/const <name> to view details");
         return;
       } else {
-        const q = (DEFAULT_CONSTANTS as any)[name];
+        const q = (env as any)[name];
         if (q) {
           const tokensRes = tokenise("1");
           if (tokensRes.isOk()) {
@@ -83,6 +92,16 @@ export function useCalculator() {
     return () => {
       const trimmed = input.trim();
       if (!trimmed) return;
+
+      // Execute /clear command
+      if (/^\s*\/clear\s*$/i.test(trimmed)) {
+        setHistory([]);
+        setResult("");
+        setResultUnit(null);
+        setHint(null);
+        setInput("");
+        return;
+      }
 
       const assignMatch = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
       if (assignMatch) {
