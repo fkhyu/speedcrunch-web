@@ -34,6 +34,7 @@ const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
   >([]);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
   const [cursorPosition, setCursorPosition] = useState(0);
+  const isSlashCommand = value.trimStart().startsWith("/");
 
   // Function to highlight syntax
   const highlightSyntax = useCallback((text: string): string => {
@@ -241,11 +242,11 @@ const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
     setCursorPosition(newCursorPosition);
 
     // Update autocomplete suggestions
-    const suggestions = disableAutocomplete
+    const suggestions = disableAutocomplete || isSlashCommand
       ? []
       : getAutocompleteMatches(newValue, newCursorPosition);
     setAutocompleteSuggestions(suggestions);
-    setShowAutocomplete(!disableAutocomplete && suggestions.length > 0);
+    setShowAutocomplete(!(disableAutocomplete || isSlashCommand) && suggestions.length > 0);
     setSelectedSuggestionIndex(0);
   }; // Handle cursor position changes
   const handleSelectionChange = () => {
@@ -427,7 +428,7 @@ const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
       const nextChar = value.charAt(start);
       const prevChar = value.charAt(start - 1);
 
-      // Insert matching pair on '(' (and wrap token under caret when no selection)
+      // Insert matching pair on '(' (prefer () after an identifier; wrap only when inside a token or selection)
       if (e.key === "(") {
         e.preventDefault();
         if (hasSelection) {
@@ -443,8 +444,24 @@ const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
           return;
         }
 
-        // No selection: try to wrap token under caret (useful at rightmost position)
+        // No selection: decide between inserting () or wrapping token
         const isTokenChar = (ch: string) => /[A-Za-z0-9_.π]/.test(ch);
+
+        // If caret is immediately after an identifier/number (common for function calls),
+        // and not already inside a token on the right, insert empty parens f() rather than wrapping f
+        if (isTokenChar(prevChar) && (!nextChar || !isTokenChar(nextChar))) {
+          const newValue = `${before}()${after}`;
+          onChange(newValue);
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.setSelectionRange(start + 1, start + 1);
+              textareaRef.current.focus();
+            }
+          }, 0);
+          return;
+        }
+
+        // Otherwise, try to wrap token under caret (useful when caret is inside a token)
         let left = start;
         while (left > 0 && isTokenChar(value.charAt(left - 1))) left--;
         let right = start;
@@ -561,7 +578,7 @@ const SyntaxHighlightedInput: React.FC<SyntaxHighlightedInputProps> = ({
       // else fall through to autocomplete handling below
     }
 
-    if (showAutocomplete && autocompleteSuggestions.length > 0) {
+    if (showAutocomplete && autocompleteSuggestions.length > 0 && !isSlashCommand) {
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
