@@ -43,9 +43,15 @@ export function formatResult(num: number, opts?: FormatOptions): string {
     const maxDen = opts.maxDenominator ?? 10000;
     const approx = approximateFraction(num, maxDen);
     if (approx) {
-      // Only use fraction if it conveys at least as much precision as default rounding
-      // Always prefer integer if denominator is 1
       if (approx.d === 1) return approx.n.toString();
+      const absN = Math.abs(approx.n);
+      if (absN > approx.d) {
+        const whole = Math.trunc(absN / approx.d) * Math.sign(approx.n);
+        const rem = absN % approx.d;
+        if (rem === 0) return whole.toString();
+        const remStr = `${rem}/${approx.d}`;
+        return `${whole} ${remStr}`;
+      }
       return `${approx.n}/${approx.d}`;
     }
   }
