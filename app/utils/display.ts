@@ -4,10 +4,56 @@ import type { Quantity } from "./units";
 import { getDisplayUnitAndFactor } from "./units";
 import type { UserPrefs } from "./units";
 
-export function formatResult(num: number): string {
+export interface FormatOptions {
+  fractional?: boolean;
+  maxDenominator?: number;
+}
+
+function approximateFraction(value: number, maxDenominator: number): { n: number; d: number } | null {
+  if (!Number.isFinite(value)) return null;
+  const sign = value < 0 ? -1 : 1;
+  let x = Math.abs(value);
+  if (Number.isInteger(x)) return { n: sign * Math.trunc(x), d: 1 };
+  // Continued fraction approximation
+  let h1 = 1, h0 = 0;
+  let k1 = 0, k0 = 1;
+  let b = x;
+  for (let i = 0; i < 64; i++) {
+    const a = Math.floor(b);
+    const h2 = a * h1 + h0;
+    const k2 = a * k1 + k0;
+    if (k2 > maxDenominator) break;
+    h0 = h1; h1 = h2;
+    k0 = k1; k1 = k2;
+    const frac = b - a;
+    if (frac < 1e-18) break;
+    b = 1 / frac;
+  }
+  if (k1 === 0) return null;
+  return { n: sign * h1, d: k1 };
+}
+
+export function formatResult(num: number, opts?: FormatOptions): string {
   if (!Number.isFinite(num)) {
     if (Number.isNaN(num)) return "NaN";
     return num === Infinity ? "Infinity" : num === -Infinity ? "-Infinity" : "NaN";
+  }
+  // Fractional mode: try to render as n/d if enabled
+  if (opts?.fractional) {
+    const maxDen = opts.maxDenominator ?? 10000;
+    const approx = approximateFraction(num, maxDen);
+    if (approx) {
+      if (approx.d === 1) return approx.n.toString();
+      const absN = Math.abs(approx.n);
+      if (absN > approx.d) {
+        const whole = Math.trunc(absN / approx.d) * Math.sign(approx.n);
+        const rem = absN % approx.d;
+        if (rem === 0) return whole.toString();
+        const remStr = `${rem}/${approx.d}`;
+        return `${whole} ${remStr}`;
+      }
+      return `${approx.n}/${approx.d}`;
+    }
   }
   if (Math.abs(num) > 1e15 || (Math.abs(num) < 1e-6 && num !== 0)) {
     return num.toExponential(6);

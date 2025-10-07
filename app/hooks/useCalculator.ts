@@ -8,7 +8,7 @@ import { getFunctionHint } from "../utils/autocompleteData";
 import { DEFAULT_CONSTANTS } from "../utils/constants";
 import { chooseDisplayFor, formatResult } from "../utils/display";
 import { debug as DebugBus } from "../utils/debug";
-import { UNIT_FAMILIES, UNITS, dimsEqual } from "../utils/units";
+import { UNIT_FAMILIES, UNITS, dimsEqual, resolveUnit, listUnitAutocompleteNames } from "../utils/units";
 import type { Token } from "../utils/tokeniser";
 import type { UserPrefs } from "../utils/units";
 
@@ -29,6 +29,7 @@ export function useCalculator() {
   const [debug, setDebug] = useState<boolean>(false);
   const [angle, setAngle] = useState<"rad" | "deg">("rad");
   const [smartIds, setSmartIds] = useState<boolean>(false);
+  const [fractional, setFractional] = useState<boolean>(false);
   const [ans, setAns] = useState<Decimal>(new Decimal(0));
   const [historyIndex, setHistoryIndex] = useState<number>(-1); // -1 means not navigating
 
@@ -81,7 +82,7 @@ export function useCalculator() {
           const tokensRes = tokenise("1");
           if (tokensRes.isOk()) {
             const chosen = chooseDisplayFor(tokensRes.value as Token[], q, prefs);
-            setResult(formatResult(chosen.display.toNumber()));
+            setResult(formatResult(chosen.display.toNumber(), { fractional }));
             setResultUnit(chosen.unit);
             setHint(null);
             return;
@@ -108,6 +109,8 @@ export function useCalculator() {
     const cmdAngle = input.trim().match(/^\s*\/angle\s+(rad|deg)\s*$/i);
     // Toggle env-based identifier splitting (live): /smartids on|off
     const cmdSmartIds = input.trim().match(/^\s*\/smartids\s+(on|off)\s*$/i);
+    // Fractional display (live preview): /frac on|off
+    const cmdFrac = input.trim().match(/^\s*\/frac\s+(on|off)\s*$/i);
     if (cmdSmartIds) {
       const onoff = (cmdSmartIds[1] as string).toLowerCase();
       const next = onoff === "on";
@@ -121,6 +124,15 @@ export function useCalculator() {
       const next = (cmdAngle[1] as string).toLowerCase() as "rad" | "deg";
       setAngle(next);
       const msg = `Angle set to ${next}`;
+      setHint(msg);
+      setResult(msg);
+      setResultUnit(null);
+      return;
+    }
+
+    if (cmdFrac) {
+      const onoff = (cmdFrac[1] as string).toLowerCase();
+      const msg = `Fractional display ${onoff}`;
       setHint(msg);
       setResult(msg);
       setResultUnit(null);
@@ -179,9 +191,10 @@ export function useCalculator() {
         const rep = (UNIT_FAMILIES as any)[famKey][0] as string;
         const repDef = (UNITS as any)[rep];
         if (repDef) {
-          const all = Object.keys(UNITS).filter((k) => {
-            const u = (UNITS as any)[k];
-            return u && dimsEqual(u.dims, repDef.dims);
+          const names = listUnitAutocompleteNames();
+          const all = names.filter((name) => {
+            const resolved = resolveUnit(name);
+            return !!resolved && dimsEqual(resolved.dims, repDef.dims);
           }).sort();
           const msg = `${famUi} units: ${all.join(", ")}. Use: /unit ${famUi} <unit|auto>`;
           setHint(msg);
@@ -211,7 +224,7 @@ export function useCalculator() {
       if (evalRes.isOk()) {
         const baseValue = evalRes.value;
         const chosen = chooseDisplayFor(tokensRes.value as Token[], baseValue, prefs);
-        setResult(formatResult(chosen.display.toNumber()));
+        setResult(formatResult(chosen.display.toNumber(), { fractional }));
         setResultUnit(chosen.unit);
         if (!debug) setHint(null);
         return;
@@ -237,7 +250,7 @@ export function useCalculator() {
       const functionHint = getFunctionHint(input);
       setHint(functionHint);
     }
-  }, [input, env, prefs, debug, angle, ans]);
+  }, [input, env, prefs, debug, angle, ans, fractional]);
 
   // Called by UI when user types; resets navigation index
   const onInputChange = useMemo(() => {
@@ -297,12 +310,27 @@ export function useCalculator() {
       const cmdDebug = trimmed.match(/^\s*\/debug\s+(on|off)\s*$/i);
       // Toggle Smart IDs
       const cmdSmartIds = trimmed.match(/^\s*\/smartids\s+(on|off)\s*$/i);
+      // Toggle fractional display
+      const cmdFrac = trimmed.match(/^\s*\/frac\s+(on|off)\s*$/i);
       if (cmdSmartIds) {
         const onoff = (cmdSmartIds[1] as string).toLowerCase();
         const next = onoff === "on";
         setSmartIds(next);
         const msg = next ? "Smart identifier splitting ON" : "Smart identifier splitting OFF";
         setHistory(prev => [...prev, { expression: `/smartids ${onoff}`, result: msg, unit: null }]);
+        setResult(msg);
+        setResultUnit(null);
+        setHint(null);
+        setInput("");
+        setHistoryIndex(-1);
+        return;
+      }
+      if (cmdFrac) {
+        const onoff = (cmdFrac[1] as string).toLowerCase();
+        const next = onoff === "on";
+        setFractional(next);
+        const msg = next ? "Fractional display ON" : "Fractional display OFF";
+        setHistory(prev => [...prev, { expression: `/frac ${onoff}`, result: msg, unit: null }]);
         setResult(msg);
         setResultUnit(null);
         setHint(null);
@@ -401,11 +429,18 @@ export function useCalculator() {
           if (value === "auto") {
             setPrefs(prev => ({ ...prev, [family]: { mode: "auto" } }));
           } else {
-            setPrefs(prev => ({ ...prev, [family]: { mode: "fixed", unit: value } }));
+            const resolved = resolveUnit(value);
+            const canonical = resolved ? resolved.symbol : value;
+            setPrefs(prev => ({ ...prev, [family]: { mode: "fixed", unit: canonical } }));
           }
           const famLabel = family;
-          const msg = value === "auto" ? `${famLabel} display set to auto` : `${famLabel} fixed to ${value}`;
-          setHistory(prev => [...prev, { expression: `/unit ${family} ${value}`, result: msg, unit: null }]);
+          const displayUnit = (() => {
+            if (value === "auto") return "auto";
+            const resolved = resolveUnit(value);
+            return resolved ? resolved.symbol : value;
+          })();
+          const msg = value === "auto" ? `${famLabel} display set to auto` : `${famLabel} fixed to ${displayUnit}`;
+          setHistory(prev => [...prev, { expression: `/unit ${family} ${value}` , result: msg, unit: null }]);
           setResult(msg);
           setResultUnit(null);
           setHint(null);
@@ -446,9 +481,10 @@ export function useCalculator() {
           const rep = (UNIT_FAMILIES as any)[famKey][0] as string;
           const repDef = (UNITS as any)[rep];
           if (repDef) {
-            const all = Object.keys(UNITS).filter((k) => {
-              const u = (UNITS as any)[k];
-              return u && dimsEqual(u.dims, repDef.dims);
+            const names = listUnitAutocompleteNames();
+            const all = names.filter((name) => {
+              const resolved = resolveUnit(name);
+              return !!resolved && dimsEqual(resolved.dims, repDef.dims);
             }).sort();
             const msg = `${famUi} units: ${all.join(", ")}. Use: /unit ${famUi} <unit|auto>`;
             setHistory(prev => [...prev, { expression: `/unit ${famUi}`, result: msg, unit: null }]);
@@ -496,7 +532,7 @@ export function useCalculator() {
             const value = evalRes.value;
             setEnv(prev => ({ ...prev, [name]: value }));
             const chosen = chooseDisplayFor(tokensRes.value as Token[], value, prefs);
-            const formattedResult = formatResult(chosen.display.toNumber());
+            const formattedResult = formatResult(chosen.display.toNumber(), { fractional });
             const unitName = chosen.unit;
             const newHistoryItem: HistoryItem = { expression: `${name} = ${rhs}`, result: formattedResult, unit: unitName };
             setHistory(prev => [...prev, newHistoryItem]);
@@ -529,7 +565,7 @@ export function useCalculator() {
         setHistoryIndex(-1);
       }
     };
-  }, [input, env, prefs, result, resultUnit]);
+  }, [input, env, prefs, result, resultUnit, fractional]);
 
   return {
     input,
