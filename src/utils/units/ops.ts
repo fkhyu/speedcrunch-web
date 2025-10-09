@@ -30,7 +30,10 @@ export function pow(a: Quantity, exponent: Decimal): Quantity {
 		// Allow rational exponents if all resulting exponents are integers
 		for (let i = 0; i < 7; i++) {
 			const newExp = new Decimal(a.dims[i]!).mul(exponent);
-			if (!newExp.isInteger()) throw new Error("BAD_UNIT_POWER");
+			// Check if the result is close to an integer (within precision tolerance)
+			const rounded = newExp.round();
+			const diff = newExp.sub(rounded).abs();
+			if (diff.gt(new Decimal(1e-10))) throw new Error("BAD_UNIT_POWER");
 		}
 		// Safe to scale dims by k because each component times exponent is integer
 		const newDimsArr: number[] = [0, 0, 0, 0, 0, 0, 0];

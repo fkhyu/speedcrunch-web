@@ -208,6 +208,10 @@ export default function evaluate(tokens: Token[], ans: Decimal, ind: Decimal, an
                             // Quantity root via power
                             return ok(qPow(radicand, ONE.div(degree)));
 						})
+						.with("sqrt", () => {
+							if (args.length !== 1) return err(args.length < 1 ? "NOT_ENOUGH_ARGS" as const : "TOO_MANY_ARGS" as const);
+							return ok(qPow(args[0]!, new Decimal(1).div(2)));
+						})
 						.with("cbrt", () => {
 							if (args.length !== 1) return err(args.length < 1 ? "NOT_ENOUGH_ARGS" as const : "TOO_MANY_ARGS" as const);
 							return ok(qPow(args[0]!, new Decimal(1).div(3)));
@@ -312,7 +316,7 @@ export default function evaluate(tokens: Token[], ans: Decimal, ind: Decimal, an
                                 if (isArgCritical) return err("TRIG_PRECISION" as const);
                                 return ok(makeScalar(func(argInRads)));
                             }
-                            if (["sinh","cosh","tanh","asinh","acosh","atanh","sqrt","cbrt","exp"].includes(funcName)) {
+                            if (["sinh","cosh","tanh","asinh","acosh","atanh","exp"].includes(funcName)) {
                                 return ok(makeScalar(func(arg.value)));
                             }
                             if (funcName === "exp2") {
