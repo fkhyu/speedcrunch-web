@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "dev.webcrunch.desktop",
   "build": {
-    "frontendDist": "../out",
+    "frontendDist": "../dist",
     "devUrl": "http://localhost:3000",
-    "beforeDevCommand": "next dev",
-    "beforeBuildCommand": "next build"
+    "beforeDevCommand": "vite",
+    "beforeBuildCommand": "vite build"
   },
   "app": {
     "windows": [

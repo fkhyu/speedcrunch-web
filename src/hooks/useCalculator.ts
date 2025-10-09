@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useMemo, useState } from "react";
 import Decimal from "decimal.js";
 import tokenise from "../utils/tokeniser";
@@ -51,12 +49,13 @@ export function useCalculator() {
       .join(" ");
 
   useEffect(() => {
-    if (!input.trim()) {
-      setResult("");
-      setResultUnit(null);
-      setHint(null);
-      return;
-    }
+    try {
+      if (!input.trim()) {
+        setResult("");
+        setResultUnit(null);
+        setHint(null);
+        return;
+      }
 
     // Built-in command: /clear → clears the history/messages
     const cmdClear = input.trim().match(/^\s*\/clear\s*$/i);
@@ -207,6 +206,27 @@ export function useCalculator() {
 
     const assignMatch = input.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
     const exprToEval = assignMatch ? (assignMatch[2] as string) : input;
+    
+    // Check for incomplete expressions that might cause errors
+    const incompletePatterns = [
+      /\(\s*$/,  // Unclosed parentheses
+      /^\s*\)/,  // Closing parenthesis without opening
+      /[+\-*/^]\s*$/,  // Operator at end
+      /^\s*[+\-*/^]/,  // Operator at start
+      /\(\s*[+\-*/^]/,  // Operator after opening parenthesis
+      /[+\-*/^]\s*\)/,  // Operator before closing parenthesis
+    ];
+    
+    const isIncomplete = incompletePatterns.some(pattern => pattern.test(exprToEval));
+    
+    if (isIncomplete && !debug) {
+      setResult("");
+      setResultUnit(null);
+      const functionHint = getFunctionHint(input);
+      setHint(functionHint);
+      return;
+    }
+    
     const tokensRes = tokenise(exprToEval, smartIds ? { envNames: Object.keys(env) } : undefined);
     if (tokensRes.isOk()) {
       if (debug) {
@@ -232,6 +252,18 @@ export function useCalculator() {
         const recent = DebugBus.getRecentLines?.(8) ?? [];
         const recentLine = recent.length ? ` | ${recent.join(" | ")}` : "";
         setHint(`EVAL_ERR: ${(evalRes as any).error}${recentLine}`);
+      } else {
+        // Show user-friendly error messages for common errors
+        const error = (evalRes as any).error;
+        if (error === 'BAD_UNIT_POWER') {
+          setHint("Invalid unit operation - check your expression");
+        } else if (error === 'DIMENSION_MISMATCH') {
+          setHint("Unit mismatch - check your units");
+        } else if (error === 'UNEXPECTED_EOF') {
+          setHint("Incomplete expression");
+        } else {
+          setHint("Invalid expression");
+        }
       }
     } else if (debug) {
       // Tokeniser error: show caret at error index
@@ -243,12 +275,15 @@ export function useCalculator() {
         const recentLine = recent.length ? ` | ${recent.join(" | ")}` : "";
         setHint(`LEX_ERR @ ${idx}${recentLine}\n${caret}`);
       }
+    } else if (!debug) {
+      // Show user-friendly error for tokenization errors
+      setHint("Invalid syntax");
     }
-    if (!debug) {
+    } catch (error) {
+      console.error('Calculator error:', error);
       setResult("");
       setResultUnit(null);
-      const functionHint = getFunctionHint(input);
-      setHint(functionHint);
+      setHint("Error: Invalid expression");
     }
   }, [input, env, prefs, debug, angle, ans, fractional]);
 
